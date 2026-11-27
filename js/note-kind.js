@@ -1,5 +1,4 @@
-// Shared separately because achievements imports logic, and both need note kinds.
-// Keeping this in either module would misplace ownership or introduce an import cycle.
+// Separate module so achievements and logic can share note kinds without circular imports.
 export const NoteKind = Object.freeze({
   VALUE: "value",
   POINTER: "pointer",
