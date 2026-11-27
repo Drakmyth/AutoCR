@@ -500,8 +500,36 @@ class NoteNode {
   content = "";
   parent = null;
   children = [];
+  kind = "value";
+  stride = 0;
+  fieldPrefix = null;
 
   constructor() {}
+
+  atOffset(offset) {
+    if (this.kind === "value") {
+      return null;
+    }
+    if (this.kind === "array") {
+      if (offset < 0 || offset >= this.size) {
+        return null;
+      }
+      offset %= this.stride;
+      if (!this.children.length) {
+        return { node: this, offset };
+      }
+    }
+    const child =
+      this.children.find((n) => parseOff(n.offset) === offset) ??
+      this.children.find(
+        (n) => offset >= parseOff(n.offset) && offset < parseOff(n.offset) + n.size,
+      );
+    if (!child) {
+      return null;
+    }
+    const relative = offset - parseOff(child.offset);
+    return child.kind === "array" ? child.atOffset(relative) : { node: child, offset: relative };
+  }
 
   toString() {
     if (!this.description || this.description.trim() === "") {
@@ -522,8 +550,6 @@ class PointerTreeParser {
     }
 
     const lines = noteText.split(/\r\n|\r|\n/);
-    const flatList = [];
-
     // Create a root node that represents the "Base" of the note.
     const root = new NoteNode();
     root.offset = "(Default)";
@@ -531,26 +557,20 @@ class PointerTreeParser {
     root.indentLevel = -2;
     root.content = noteText;
 
-    if (lines.length > 0) {
-      root.size = PointerTreeParser.parseSizeFromDescription(lines[0]);
-    }
-
-    flatList.push(root);
+    PointerTreeParser.configureNode(root, noteText);
 
     const stack = [];
     const logicalRoot = new NoteNode();
     logicalRoot.indentLevel = -1;
+    logicalRoot.kind = root.kind;
+    logicalRoot.size = root.size;
     stack.push(logicalRoot);
 
     let lastAddedNode = null;
 
-    // Regex to parse specific pointer lines.
-    // Group 1: Indentation (traditional chars + whitespace + Unicode box drawing chars \u2500-\u257F)
-    // Group 2: Sign (+ or -).
-    // Group 3: Hex value (0x...).
-    // Group 4: Separator (|, =, :).
-    // Group 5: Description/Remainder.
-    const offsetRegex = /^([.+\s\u2500-\u257F]*)([-+]?)(0x[0-9A-Fa-f]+)\s*([|=:])?\s*(.*)$/;
+    // Structural prefixes end in ASCII '+' or '|', immediately followed by an offset.
+    const offsetRegex =
+      /^([.+|\s\u2500-\u257F]*)(-?(?:0x[0-9A-Fa-f]+|\d+))(?![A-Za-z0-9])\s*([|=:])?\s*(.*)$/;
 
     // Helper regex to strip structural characters from description/enum lines.
     const prefixStripRegex = /^([.+\s\u2500-\u257F]+)/;
@@ -566,21 +586,21 @@ class PointerTreeParser {
       let isNode = false;
 
       if (match) {
-        const indentStr = match[1];
-        const sign = match[2];
-        const separator = match[4];
-
-        const hasSign = !!sign; // e.g. +0x10 is definitely an offset
-        const hasIndent = indentStr.length > 0;
-
-        if (hasSign) {
-          isNode = true;
-        } else if (indentStr.includes("+")) {
-          isNode = true; // Treat any indentation with '+' as a node
-        } else if (hasIndent) {
-          // Indented with dots/spaces/box only, no sign (e.g. "..0x04").
-          if (separator === "|") {
-            isNode = true;
+        const prefix = match[1];
+        const marker = prefix.at(-1);
+        if (marker === "+" || marker === "|") {
+          while (stack.length > 1 && stack.at(-1).indentLevel >= prefix.length) {
+            stack.pop();
+          }
+          const parent = stack.at(-1);
+          if (parent.kind === "value" && marker === "+" && parent.size <= 4) {
+            parent.kind = "pointer";
+          }
+          isNode =
+            parent.kind !== "value" &&
+            (parent.fieldPrefix === null || parent.fieldPrefix === prefix);
+          if (isNode) {
+            parent.fieldPrefix = prefix;
           }
         }
       }
@@ -590,9 +610,10 @@ class PointerTreeParser {
         // Natural depth tracking: visual prefix length dictates the hierarchy level
         const indent = indentStr.length;
 
-        const sign = match[2];
-        const hex = match[3];
-        let desc = match[5];
+        const offsetValue = match[2].startsWith("-")
+          ? -Number(match[2].slice(1))
+          : Number(match[2]);
+        let desc = match[4];
 
         // Strip leading separators (- : =) just in case
         while (
@@ -604,19 +625,14 @@ class PointerTreeParser {
         desc = desc.trim();
 
         // Normalization
-        let offset = sign + hex;
-        if (!offset.startsWith("+") && !offset.startsWith("-")) {
-          offset = "+" + offset;
-        }
-
-        const size = PointerTreeParser.parseSizeFromDescription(desc);
-
+        const offset =
+          offsetValue < 0 ? `-0x${(-offsetValue).toString(16)}` : `+0x${offsetValue.toString(16)}`;
         const node = new NoteNode();
         node.offset = offset;
         node.description = desc;
         node.rawLineIndex = i;
         node.indentLevel = indent;
-        node.size = size;
+        PointerTreeParser.configureNode(node, desc);
 
         // Tree Construction
         while (stack.length > 0 && stack.at(-1).indentLevel >= indent) {
@@ -646,8 +662,7 @@ class PointerTreeParser {
       }
     }
 
-    PointerTreeParser.collectAllNodes(logicalRoot, flatList);
-
+    root.children = logicalRoot.children;
     const resultList = [root];
     const parsedNodes = [];
     PointerTreeParser.collectAllNodes(logicalRoot, parsedNodes);
@@ -656,35 +671,31 @@ class PointerTreeParser {
     return resultList;
   }
 
-  static parseSizeFromDescription(desc) {
-    if (!desc) {
-      return 1;
+  static arrayLayout(text) {
+    const header = text.split(/\r\n|\r|\n/, 1)[0];
+    const match = header.match(/\b(\d+)\s*x\s*(\d+)\s*-?\s*(bytes?|bits?)\b/i);
+    const struct = header.match(/\b(\d+)\s*-?\s*(bytes?|bits?)\s+struct(?:ure)?\b/i);
+    if (!match && !struct) {
+      return null;
     }
+    const count = match ? Number(match[1]) : 1;
+    const length = Number(match ? match[2] : struct[1]);
+    const unit = match ? match[3] : struct[2];
+    const stride = unit.toLowerCase().startsWith("bit") ? Math.ceil(length / 8) : length;
+    const size = count * stride;
+    return count > 0 && stride > 0 && Number.isSafeInteger(size) ? { size, stride } : null;
+  }
 
-    // 1. Check for explicit byte count
-    const bytesMatch = desc.match(/\[.*?(\d+)\s*[-]?\s*bytes?.*?\]/i);
-    if (bytesMatch && bytesMatch[1]) {
-      const bSize = Number.parseInt(bytesMatch[1], 10);
-      if (!Number.isNaN(bSize)) {
-        return bSize;
-      }
+  static configureNode(node, text) {
+    const header = text.split(/\r\n|\r|\n/, 1)[0];
+    const array = PointerTreeParser.arrayLayout(header);
+    node.size = CodeNote.getSize(header)[1];
+    const textNote = !array && /\bascii\b/i.test(header) && node.size > 4;
+    node.stride = textNote ? 0 : (array?.stride ?? (node.size > 4 ? node.size : 0));
+    node.kind = /\bpointer\b/i.test(header) ? "pointer" : node.stride ? "array" : "value";
+    if (node.kind === "value" && node.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
+      node.kind = "pointer";
     }
-
-    // 2. Check for standard type tags
-    if (desc.includes("[32-bit") || desc.includes("[Float")) {
-      return 4;
-    }
-    if (desc.includes("[24-bit")) {
-      return 3;
-    }
-    if (desc.includes("[16-bit")) {
-      return 2;
-    }
-    if (desc.includes("[8-bit")) {
-      return 1;
-    }
-
-    return 1;
   }
 
   static collectAllNodes(node, flatList) {
@@ -725,12 +736,10 @@ export class CodeNote {
 
     [this.addressNote, this.hasGeneralGameNotes] = CodeNote.splitGeneralGameNotes(this.addr, note);
     [this.type, this.size] = CodeNote.getSize(this.addressNote);
-    if (!this.isProbablePointer()) {
+    this.noteNodes = PointerTreeParser.parseNoteText(this.addressNote);
+    if (this.noteNodes[0]?.kind === "value") {
       this.enum = CodeNote.parseEnumerations(this.addressNote);
     }
-
-    // Parse the note into a structure tree for the explainer
-    this.noteNodes = PointerTreeParser.parseNoteText(this.addressNote);
   }
 
   static splitGeneralGameNotes(addr, note) {
@@ -745,6 +754,20 @@ export class CodeNote {
     return this.hasGeneralGameNotes && this.addressNote.trim() === "";
   }
 
+  resolve(offsets = []) {
+    if (!this.noteNodes.length) {
+      return null;
+    }
+    let match = { node: this.noteNodes[0], offset: 0 };
+    for (const offset of offsets) {
+      match = match.node.atOffset(offset);
+      if (!match) {
+        return null;
+      }
+    }
+    return match;
+  }
+
   getHeader() {
     return this.note.split("\n")[0];
   }
@@ -753,7 +776,9 @@ export class CodeNote {
   }
 
   isArray() {
-    return this.size >= (this.type ? this.type.bytes : 1) * 2;
+    return (
+      this.noteNodes[0]?.kind === "array" || this.size >= (this.type ? this.type.bytes : 1) * 2
+    );
   }
 
   contains(addr) {
@@ -761,21 +786,18 @@ export class CodeNote {
   }
 
   isProbablePointer() {
-    const lines = this.addressNote.toLowerCase().split("\n");
-    if (["ptr", "pointer"].some((x) => lines[0].includes(x))) {
-      return true;
-    }
-    if (lines.filter((x, i) => i > 0 && /^[.+\s\u2500-\u257F]*\+/.test(x)).length >= 2) {
-      return true;
-    }
-    return false;
+    return this.noteNodes[0]?.kind === "pointer";
   }
 
   static getSize(note) {
+    const array = PointerTreeParser.arrayLayout(note);
+    if (array) {
+      return [null, array.size];
+    }
     let bytes = 1;
     let memSize = null;
 
-    const sNote = note.split("\n", 1)[0].toLowerCase();
+    const sNote = note.split(/\r\n|\r|\n/, 1)[0].toLowerCase();
     if (sNote.length < 4) {
       return [null, 1];
     }
@@ -1027,10 +1049,14 @@ export class CodeNoteSet extends Array {
     } else {
       // Direct Lookup
       const note = this.get(addr);
-      if (note) {
+      if (!note) {
+        return null;
+      }
+      if (note.noteNodes[0]?.kind !== "array") {
         return note.note;
       }
-      return null;
+      const match = note.resolve([addr - note.addr]);
+      return match ? [match.node.description, match.node.content].filter(Boolean).join("\n") : null;
     }
 
     const base_hex = "0x" + baseAddr.toString(16);
@@ -1054,45 +1080,8 @@ export class CodeNoteSet extends Array {
       break;
     }
 
-    // 3. Traverse Note Node Tree
-    let foundNode = null;
-    if (note && note.noteNodes) {
-      // Filter for nodes attached to the Logical Root (Indent -1).
-      let currentNodes = note.noteNodes.filter((n) => n.parent && n.parent.indentLevel === -1);
-
-      if (currentNodes && currentNodes.length > 0) {
-        // Iterate through offsets (Intermediates -> Leaf)
-        for (let i = 0; i < offsets.length; i++) {
-          const offVal = offsets[i];
-          const isLeaf = i === offsets.length - 1;
-          let match = null;
-
-          for (const n of currentNodes) {
-            const nOff = parseOff(n.offset);
-            if (offVal >= nOff && offVal < nOff + n.size) {
-              match = n;
-              break;
-            }
-          }
-
-          if (match) {
-            if (isLeaf) {
-              // We found the node covering the final offset
-              foundNode = match;
-            } else {
-              // Intermediate offset: drill down to children
-              if (match.children && match.children.length > 0) {
-                currentNodes = match.children;
-              } else {
-                break; // Chain broke, rely on fallback
-              }
-            }
-          } else {
-            break; // Offset not found in tree, rely on fallback
-          }
-        }
-      }
-    }
+    // 3. Resolve inline array fields without adding a pointer dereference.
+    const foundNode = note?.resolve(offsets)?.node;
 
     // Successfully traversed chain and found a documented inner node
     if (foundNode) {
