@@ -595,7 +595,8 @@ class PointerTreeParser {
       let isNode = false;
 
       if (match) {
-        const prefix = match[1].replace(/-$/, "+");
+        const rawPrefix = match[1];
+        const prefix = rawPrefix.replace(/-$/, "+");
         const marker = prefix.at(-1);
         if (marker === "+" || marker === "|") {
           while (stack.length > 1 && stack.at(-1).indentLevel >= prefix.length) {
@@ -616,11 +617,14 @@ class PointerTreeParser {
 
       if (isNode) {
         const indentStr = match[1];
+        const offsetLiteral = match[2];
+        let desc = match[4];
         // Natural depth tracking: visual prefix length dictates the hierarchy level
         const indent = indentStr.length;
 
-        const offsetValue = match[1].endsWith("-") ? -Number(match[2]) : Number(match[2]);
-        let desc = match[4];
+        const offsetValue = indentStr.endsWith("-")
+          ? -Number(offsetLiteral)
+          : Number(offsetLiteral);
 
         // Strip leading separators (- : =) just in case
         while (
