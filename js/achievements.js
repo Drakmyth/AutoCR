@@ -568,9 +568,9 @@ class PointerTreeParser {
 
     let lastAddedNode = null;
 
-    // Structural prefixes end in ASCII '+' or '|', immediately followed by an offset.
+    // Structural prefixes end in ASCII '+', '-', or '|', immediately followed by an offset.
     const offsetRegex =
-      /^([.+|\s\u2500-\u257F]*)(-?(?:0x[0-9A-Fa-f]+|\d+))(?![A-Za-z0-9])\s*([|=:])?\s*(.*)$/;
+      /^([.+|\s\u2500-\u257F-]*)(-?(?:0x[0-9A-Fa-f]+|\d+))(?![A-Za-z0-9])\s*([|=:])?\s*(.*)$/;
 
     // Helper regex to strip structural characters from description/enum lines.
     const prefixStripRegex = /^([.+\s\u2500-\u257F]+)/;
@@ -586,7 +586,7 @@ class PointerTreeParser {
       let isNode = false;
 
       if (match) {
-        const prefix = match[1];
+        const prefix = match[1].replace(/-$/, "+");
         const marker = prefix.at(-1);
         if (marker === "+" || marker === "|") {
           while (stack.length > 1 && stack.at(-1).indentLevel >= prefix.length) {
@@ -610,9 +610,7 @@ class PointerTreeParser {
         // Natural depth tracking: visual prefix length dictates the hierarchy level
         const indent = indentStr.length;
 
-        const offsetValue = match[2].startsWith("-")
-          ? -Number(match[2].slice(1))
-          : Number(match[2]);
+        const offsetValue = match[1].endsWith("-") ? -Number(match[2]) : Number(match[2]);
         let desc = match[4];
 
         // Strip leading separators (- : =) just in case
@@ -692,7 +690,7 @@ class PointerTreeParser {
     node.size = CodeNote.getSize(header)[1];
     const textNote = !array && /\bascii\b/i.test(header) && node.size > 4;
     node.stride = textNote ? 0 : (array?.stride ?? (node.size > 4 ? node.size : 0));
-    node.kind = /\bpointer\b/i.test(header) ? "pointer" : node.stride ? "array" : "value";
+    node.kind = /ptr|pointer/i.test(header) ? "pointer" : node.stride ? "array" : "value";
     if (node.kind === "value" && node.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
       node.kind = "pointer";
     }
@@ -767,6 +765,9 @@ export class CodeNote {
       }
     }
     for (const offset of offsets) {
+      if (match.node.kind === "pointer" && match.offset !== 0) {
+        return null;
+      }
       match = match.node.atOffset(offset);
       if (!match) {
         return null;

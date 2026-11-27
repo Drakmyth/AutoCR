@@ -94,6 +94,28 @@ describe("array code notes", () => {
     expect(notes.get_text(8, [{ type: "base", value: 0x1020 }])).toBeNull();
   });
 
+  it("preserves ptr headers and signed pointer fields", () => {
+    const note = new CodeNote(
+      0x1000,
+      "[32-bit] Player ptr\n-0x04: [8-bit] Before\n+0x04: [8-bit] After",
+    );
+    expect(note.isProbablePointer()).toBe(true);
+    expect(new CodeNote(0x1000, "[32-bit] PlayerPtr").isProbablePointer()).toBe(true);
+    expect(note.resolve([-4])?.node.description).toContain("Before");
+    expect(note.resolve([4])?.node.description).toContain("After");
+  });
+
+  it("rejects shifted pointer dereferences inside nested arrays", () => {
+    const note = new CodeNote(
+      0x1000,
+      "[32-bit pointer] Root\n+0x20: [4x16 bytes] Records\n+|0x00: [32-bit pointer] Object\n+|+0x08: [8-bit] State",
+    );
+    for (const offset of [0x20, 0x50]) {
+      expect(note.resolve([offset, 8])?.node.description).toContain("State");
+      expect(note.resolve([offset + 1, 8])).toBeNull();
+    }
+  });
+
   it("does not interpret an index legend as an enum of array values", () => {
     const note = new CodeNote(
       0,
