@@ -505,7 +505,24 @@ class NoteNode {
   stride = 0;
   fieldPrefix = null;
 
-  constructor() {}
+  // Determines a node's size, kind, and stride from its note text.
+  constructor(text = "") {
+    const header = text.split(/\r\n|\r|\n/, 1)[0];
+    const array = PointerTreeParser.arrayLayout(header);
+    this.size = CodeNote.getSize(header)[1];
+    const textNote = !array && /\bascii\b/i.test(header) && this.size > 4;
+    this.stride = textNote ? 0 : (array?.stride ?? (this.size > 4 ? this.size : 0));
+    this.kind = /ptr|pointer/i.test(header)
+      ? NoteKind.POINTER
+      : this.stride
+        ? NoteKind.ARRAY
+        : NoteKind.VALUE;
+    // Legacy implicit pointer: a line starts with decoration followed by '+' and a digit.
+    // Noncapturing groups cover the start of the note and each supported line ending.
+    if (this.kind === NoteKind.VALUE && this.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
+      this.kind = NoteKind.POINTER;
+    }
+  }
 
   // Finds a field at a byte offset, resolving inline arrays without following pointers.
   atOffset(offset) {
@@ -555,13 +572,11 @@ class PointerTreeParser {
 
     const lines = noteText.split(/\r\n|\r|\n/);
     // Create a root node that represents the "Base" of the note.
-    const root = new NoteNode();
+    const root = new NoteNode(noteText);
     root.offset = "(Default)";
     root.description = "Full Note";
     root.indentLevel = -2;
     root.content = noteText;
-
-    PointerTreeParser.configureNode(root, noteText);
 
     const stack = [];
     const logicalRoot = new NoteNode();
@@ -638,12 +653,11 @@ class PointerTreeParser {
         // Normalization
         const offset =
           offsetValue < 0 ? `-0x${(-offsetValue).toString(16)}` : `+0x${offsetValue.toString(16)}`;
-        const node = new NoteNode();
+        const node = new NoteNode(desc);
         node.offset = offset;
         node.description = desc;
         node.rawLineIndex = i;
         node.indentLevel = indent;
-        PointerTreeParser.configureNode(node, desc);
 
         // Tree Construction
         while (stack.length > 0 && stack.at(-1).indentLevel >= indent) {
@@ -698,25 +712,6 @@ class PointerTreeParser {
     const stride = unit.toLowerCase().startsWith("bit") ? Math.ceil(length / 8) : length;
     const size = count * stride;
     return count > 0 && stride > 0 && Number.isSafeInteger(size) ? { size, stride } : null;
-  }
-
-  // Determines a node's size, kind, and stride from its note text.
-  static configureNode(node, text) {
-    const header = text.split(/\r\n|\r|\n/, 1)[0];
-    const array = PointerTreeParser.arrayLayout(header);
-    node.size = CodeNote.getSize(header)[1];
-    const textNote = !array && /\bascii\b/i.test(header) && node.size > 4;
-    node.stride = textNote ? 0 : (array?.stride ?? (node.size > 4 ? node.size : 0));
-    node.kind = /ptr|pointer/i.test(header)
-      ? NoteKind.POINTER
-      : node.stride
-        ? NoteKind.ARRAY
-        : NoteKind.VALUE;
-    // Legacy implicit pointer: a line starts with decoration followed by '+' and a digit.
-    // Noncapturing groups cover the start of the note and each supported line ending.
-    if (node.kind === NoteKind.VALUE && node.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
-      node.kind = NoteKind.POINTER;
-    }
   }
 
   static collectAllNodes(node, flatList) {
