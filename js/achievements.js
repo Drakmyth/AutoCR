@@ -754,11 +754,18 @@ export class CodeNote {
     return this.hasGeneralGameNotes && this.addressNote.trim() === "";
   }
 
-  resolve(offsets = []) {
+  resolve(offsets = [], baseOffset = null) {
     if (!this.noteNodes.length) {
       return null;
     }
     let match = { node: this.noteNodes[0], offset: 0 };
+    // A chain may start by reading a pointer stored inside a root array.
+    if (baseOffset !== null && match.node.kind === "array") {
+      match = match.node.atOffset(baseOffset);
+      if (!match || match.node.kind !== "pointer" || match.offset !== 0) {
+        return null;
+      }
+    }
     for (const offset of offsets) {
       match = match.node.atOffset(offset);
       if (!match) {
@@ -1065,6 +1072,7 @@ export class CodeNoteSet extends Array {
 
     // 2. Resolve Base Note & Redirects
     let note = this.get(baseAddr);
+    const sourceAddress = note?.addr ?? baseAddr;
     let redirects = 0;
     while (note && redirects < 5) {
       const match = note.note.match(/refer to \$0x([0-9a-fA-F]+)/i);
@@ -1081,7 +1089,7 @@ export class CodeNoteSet extends Array {
     }
 
     // 3. Resolve inline array fields without adding a pointer dereference.
-    const foundNode = note?.resolve(offsets)?.node;
+    const foundNode = note?.resolve(offsets, baseAddr - sourceAddress)?.node;
 
     // Successfully traversed chain and found a documented inner node
     if (foundNode) {

@@ -78,6 +78,22 @@ describe("array code notes", () => {
     expect(note.resolve([20, 8])).toBeNull();
   });
 
+  it("resolves pointer chains starting within a root array", () => {
+    const notes = new CodeNoteSet();
+    notes.add(
+      new CodeNote(
+        0x1000,
+        "[4x8 bytes] Inventory\n|0x00: [32-bit pointer] Item\n|+0x08: [8-bit] State\n|0x04: [16-bit] Quantity",
+      ),
+    );
+    for (const base of [0x1000, 0x1018]) {
+      expect(notes.get_text(8, [{ type: "base", value: base }])).toContain("State");
+    }
+    expect(notes.get_text(8, [{ type: "base", value: 0x1001 }])).toBeNull();
+    expect(notes.get_text(8, [{ type: "base", value: 0x1004 }])).toBeNull();
+    expect(notes.get_text(8, [{ type: "base", value: 0x1020 }])).toBeNull();
+  });
+
   it("does not interpret an index legend as an enum of array values", () => {
     const note = new CodeNote(
       0,
