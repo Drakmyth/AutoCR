@@ -577,6 +577,7 @@ export class ConditionFormatter {
     return note;
   }
 
+  // Resolves a direct address or pointer chain to a field, following note redirects.
   static resolveNote(notesLookup, address, chainInfo = []) {
     const base = chainInfo.find((part) => part.type === "base");
     if (chainInfo.length && !base) {
@@ -604,6 +605,7 @@ export class ConditionFormatter {
     return { ...match, note };
   }
 
+  // Builds a field label, including any byte offset within the field.
   static fieldAlias(match) {
     let name = match.node.description.replaceAll(/\[.*?\]/g, "").trim();
     if (match.offset > 0) {
