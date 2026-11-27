@@ -507,6 +507,7 @@ class NoteNode {
 
   constructor() {}
 
+  // Finds a field at a byte offset, resolving inline arrays without following pointers.
   atOffset(offset) {
     if (this.kind === NoteKind.VALUE) {
       return null;
@@ -677,6 +678,7 @@ class PointerTreeParser {
     return resultList;
   }
 
+  // Reads the total byte size and record stride from an array or struct header.
   static arrayLayout(text) {
     const header = text.split(/\r\n|\r|\n/, 1)[0];
     // Counted layout, e.g. '18x32 bytes': groups 1=count, 2=element length, 3=unit.
@@ -694,6 +696,7 @@ class PointerTreeParser {
     return count > 0 && stride > 0 && Number.isSafeInteger(size) ? { size, stride } : null;
   }
 
+  // Determines a node's size, kind, and stride from its note text.
   static configureNode(node, text) {
     const header = text.split(/\r\n|\r|\n/, 1)[0];
     const array = PointerTreeParser.arrayLayout(header);
@@ -768,6 +771,8 @@ export class CodeNote {
     return this.hasGeneralGameNotes && this.addressNote.trim() === "";
   }
 
+  // Resolves pointer-chain offsets to a documented field.
+  // baseOffset selects a pointer stored inside a root array.
   resolve(offsets = [], baseOffset = null) {
     if (!this.noteNodes.length) {
       return null;
