@@ -1,4 +1,5 @@
 import { ReqType, ConditionFormatter } from "./logic";
+import { NoteKind } from "./note-kind";
 
 // --------------------------------------------------
 // Infrastructure & Basic Processors
@@ -302,7 +303,7 @@ class ExplanationContext {
       }
     }
 
-    return targetNode?.kind === "value"
+    return targetNode?.kind === NoteKind.VALUE
       ? (ConditionFormatter.parseBitLabelFromText(targetNode.content, bitIndex) ?? "")
       : "";
   }
@@ -1315,7 +1316,7 @@ class AsciiStringProcessor extends LogicProcessor {
       addressVal,
       ctx.buildChainInfo(index),
     );
-    if (!match || match.node.kind !== "value") {
+    if (!match || match.node.kind !== NoteKind.VALUE) {
       return "";
     }
     return match.node.description === "Full Note"

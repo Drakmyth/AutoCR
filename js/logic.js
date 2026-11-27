@@ -1,3 +1,5 @@
+import { NoteKind } from "./note-kind";
+
 export const ReqAddrType = Object.freeze({ VALUE: 0, CURRENT: 1, PAST: 2 });
 
 export const ReqType = Object.freeze({
@@ -531,6 +533,7 @@ function parseHex(s) {
   return Number.isNaN(val) ? -1 : val;
 }
 
+// Group 1: Hexadecimal target address in the existing 'refer to $0x...' convention.
 const NOTE_REDIRECT = /refer to \$0x([0-9a-fA-F]+)/i;
 
 export class ConditionFormatter {
@@ -588,14 +591,14 @@ export class ConditionFormatter {
       : source;
     const offsets = base
       ? [...chainInfo.filter((part) => part.type === "offset").map((part) => part.value), address]
-      : note.noteNodes[0]?.kind === "array"
+      : note.noteNodes[0]?.kind === NoteKind.ARRAY
         ? [address - source.addr]
         : [];
     const match = note.resolve(offsets, base ? base.value - source.addr : null);
     if (!match) {
       return null;
     }
-    if (!base && (note.noteNodes[0]?.kind !== "array" || match.node === note.noteNodes[0])) {
+    if (!base && (note.noteNodes[0]?.kind !== NoteKind.ARRAY || match.node === note.noteNodes[0])) {
       match.offset = address - source.addr;
     }
     return { ...match, note };
@@ -681,7 +684,7 @@ export class ConditionFormatter {
     }
 
     const match = ConditionFormatter.resolveNote(notesLookup, contextAddr, chainInfo);
-    if (!match || match.node.kind !== "value") {
+    if (!match || match.node.kind !== NoteKind.VALUE) {
       return null;
     }
     const note = match.note;
