@@ -706,9 +706,11 @@ class PointerTreeParser {
     if (!match && !struct) {
       return null;
     }
-    const count = match ? Number(match[1]) : 1;
-    const length = Number(match ? match[2] : struct[1]);
+    const countLiteral = match ? match[1] : "1";
+    const lengthLiteral = match ? match[2] : struct[1];
     const unit = match ? match[3] : struct[2];
+    const count = Number(countLiteral);
+    const length = Number(lengthLiteral);
     const stride = unit.toLowerCase().startsWith("bit") ? Math.ceil(length / 8) : length;
     const size = count * stride;
     return count > 0 && stride > 0 && Number.isSafeInteger(size) ? { size, stride } : null;
