@@ -1,4 +1,5 @@
 import { Logic, FormatType, FormatTypeMap, MemSize } from "./logic";
+import { NoteKind } from "./note-kind";
 
 class MemRegion {
   start;
@@ -500,17 +501,17 @@ class NoteNode {
   content = "";
   parent = null;
   children = [];
-  kind = "value";
+  kind = NoteKind.VALUE;
   stride = 0;
   fieldPrefix = null;
 
   constructor() {}
 
   atOffset(offset) {
-    if (this.kind === "value") {
+    if (this.kind === NoteKind.VALUE) {
       return null;
     }
-    if (this.kind === "array") {
+    if (this.kind === NoteKind.ARRAY) {
       if (offset < 0 || offset >= this.size) {
         return null;
       }
@@ -528,7 +529,9 @@ class NoteNode {
       return null;
     }
     const relative = offset - parseOff(child.offset);
-    return child.kind === "array" ? child.atOffset(relative) : { node: child, offset: relative };
+    return child.kind === NoteKind.ARRAY
+      ? child.atOffset(relative)
+      : { node: child, offset: relative };
   }
 
   toString() {
@@ -569,10 +572,15 @@ class PointerTreeParser {
     let lastAddedNode = null;
 
     // Structural prefixes end in ASCII '+', '-', or '|', immediately followed by an offset.
+    // Group 1: Nesting prefix (e.g. '+', '+|', or '+|+'), including a negative offset's sign.
+    // Group 2: Decimal or hexadecimal offset magnitude.
+    // Group 3: Optional separator ('|', '=', or ':').
+    // Group 4: Field description. The boundary check prevents partial numeric matches.
     const offsetRegex =
       /^([.+|\s\u2500-\u257F-]*)(-?(?:0x[0-9A-Fa-f]+|\d+))(?![A-Za-z0-9])\s*([|=:])?\s*(.*)$/;
 
-    // Helper regex to strip structural characters from description/enum lines.
+    // Group 1: Leading indentation/decorative characters to remove from prose and enums.
+    // ASCII '|' is excluded because it marks array fields, not decorative indentation.
     const prefixStripRegex = /^([.+\s\u2500-\u257F]+)/;
 
     for (let i = 0; i < lines.length; i++) {
@@ -593,11 +601,11 @@ class PointerTreeParser {
             stack.pop();
           }
           const parent = stack.at(-1);
-          if (parent.kind === "value" && marker === "+" && parent.size <= 4) {
-            parent.kind = "pointer";
+          if (parent.kind === NoteKind.VALUE && marker === "+" && parent.size <= 4) {
+            parent.kind = NoteKind.POINTER;
           }
           isNode =
-            parent.kind !== "value" &&
+            parent.kind !== NoteKind.VALUE &&
             (parent.fieldPrefix === null || parent.fieldPrefix === prefix);
           if (isNode) {
             parent.fieldPrefix = prefix;
@@ -671,7 +679,9 @@ class PointerTreeParser {
 
   static arrayLayout(text) {
     const header = text.split(/\r\n|\r|\n/, 1)[0];
+    // Counted layout, e.g. '18x32 bytes': groups 1=count, 2=element length, 3=unit.
     const match = header.match(/\b(\d+)\s*x\s*(\d+)\s*-?\s*(bytes?|bits?)\b/i);
+    // Single record, e.g. '16-byte struct': groups 1=record length, 2=unit.
     const struct = header.match(/\b(\d+)\s*-?\s*(bytes?|bits?)\s+struct(?:ure)?\b/i);
     if (!match && !struct) {
       return null;
@@ -690,9 +700,15 @@ class PointerTreeParser {
     node.size = CodeNote.getSize(header)[1];
     const textNote = !array && /\bascii\b/i.test(header) && node.size > 4;
     node.stride = textNote ? 0 : (array?.stride ?? (node.size > 4 ? node.size : 0));
-    node.kind = /ptr|pointer/i.test(header) ? "pointer" : node.stride ? "array" : "value";
-    if (node.kind === "value" && node.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
-      node.kind = "pointer";
+    node.kind = /ptr|pointer/i.test(header)
+      ? NoteKind.POINTER
+      : node.stride
+        ? NoteKind.ARRAY
+        : NoteKind.VALUE;
+    // Legacy implicit pointer: a line starts with decoration followed by '+' and a digit.
+    // Noncapturing groups cover the start of the note and each supported line ending.
+    if (node.kind === NoteKind.VALUE && node.size <= 4 && /(?:^|\r|\n)[^\w\r\n]*\+\d/.test(text)) {
+      node.kind = NoteKind.POINTER;
     }
   }
 
@@ -735,7 +751,7 @@ export class CodeNote {
     [this.addressNote, this.hasGeneralGameNotes] = CodeNote.splitGeneralGameNotes(this.addr, note);
     [this.type, this.size] = CodeNote.getSize(this.addressNote);
     this.noteNodes = PointerTreeParser.parseNoteText(this.addressNote);
-    if (this.noteNodes[0]?.kind === "value") {
+    if (this.noteNodes[0]?.kind === NoteKind.VALUE) {
       this.enum = CodeNote.parseEnumerations(this.addressNote);
     }
   }
@@ -758,14 +774,14 @@ export class CodeNote {
     }
     let match = { node: this.noteNodes[0], offset: 0 };
     // A chain may start by reading a pointer stored inside a root array.
-    if (baseOffset !== null && match.node.kind === "array") {
+    if (baseOffset !== null && match.node.kind === NoteKind.ARRAY) {
       match = match.node.atOffset(baseOffset);
-      if (!match || match.node.kind !== "pointer" || match.offset !== 0) {
+      if (!match || match.node.kind !== NoteKind.POINTER || match.offset !== 0) {
         return null;
       }
     }
     for (const offset of offsets) {
-      if (match.node.kind === "pointer" && match.offset !== 0) {
+      if (match.node.kind === NoteKind.POINTER && match.offset !== 0) {
         return null;
       }
       match = match.node.atOffset(offset);
@@ -785,7 +801,8 @@ export class CodeNote {
 
   isArray() {
     return (
-      this.noteNodes[0]?.kind === "array" || this.size >= (this.type ? this.type.bytes : 1) * 2
+      this.noteNodes[0]?.kind === NoteKind.ARRAY ||
+      this.size >= (this.type ? this.type.bytes : 1) * 2
     );
   }
 
@@ -794,7 +811,7 @@ export class CodeNote {
   }
 
   isProbablePointer() {
-    return this.noteNodes[0]?.kind === "pointer";
+    return this.noteNodes[0]?.kind === NoteKind.POINTER;
   }
 
   static getSize(note) {
@@ -1060,7 +1077,7 @@ export class CodeNoteSet extends Array {
       if (!note) {
         return null;
       }
-      if (note.noteNodes[0]?.kind !== "array") {
+      if (note.noteNodes[0]?.kind !== NoteKind.ARRAY) {
         return note.note;
       }
       const match = note.resolve([addr - note.addr]);
